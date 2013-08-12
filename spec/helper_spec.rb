@@ -265,6 +265,38 @@ describe Split::Helper do
 
   end
 
+  describe 'clean_old_experiments' do
+    before(:each) do
+      Split.configuration.experiments = {
+          :known_experiment  => {
+              :alternatives => ['a', 'b']
+          }
+      }
+      ab_user.keys.each do |key|
+        ab_user.delete(key)
+      end
+    end
+
+    it 'should not delete the cookie for a config-known experiment' do
+      ab_user['known_experiment'] = 'b'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment'])
+    end
+
+    it 'should delete the cookie for an unknown experiment' do
+      ab_user['known_experiment'] = 'b'
+      ab_user['unknown_experiment'] = 'c'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment'])
+    end
+
+    it 'should not delete the cookie for a versioned config-known experiment' do
+      ab_user['known_experiment:23'] = 'b'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment:23'])
+    end
+  end
+
   context "finished with config" do
     it "passes reset option" do
       Split.configuration.experiments = {

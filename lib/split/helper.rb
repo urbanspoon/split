@@ -111,6 +111,21 @@ module Split
       instance_eval(&Split.configuration.ignore_filter)
     end
 
+    def clean_old_experiments
+      participating_experiments = ab_user.keys.collect{|k| k.split(':')[0]}
+      config_experiments = Split.configuration.normalized_experiments.keys
+      potential_unknowns = participating_experiments - config_experiments
+      if potential_unknowns.length > 0
+        datastore_experiments = Split::Experiment.names
+        unrecognized_experiments = potential_unknowns - datastore_experiments
+        unrecognized_experiments.each do |old_experiment|
+          ab_user.keys.select{|k| k.match /^#{old_experiment}(:\d+)?$/}.each do |key|
+            ab_user.delete key
+          end
+        end
+      end
+    end
+
     def not_allowed_to_test?(experiment_key)
       !Split.configuration.allow_multiple_experiments && doing_other_tests?(experiment_key)
     end
@@ -151,10 +166,10 @@ module Split
 
     def normalize_experiment(metric_descriptor)
       if Hash === metric_descriptor
-        experiment_name = metric_descriptor.keys.first
+        experiment_name = metric_descriptor.keys.first.to_s
         goals = Array(metric_descriptor.values.first)
       else
-        experiment_name = metric_descriptor
+        experiment_name = metric_descriptor.to_s
         goals = []
       end
       return experiment_name, goals
@@ -170,8 +185,11 @@ module Split
         ret = override_alternative(experiment.name)
         ab_user[experiment.key] = ret if Split.configuration.store_override
       elsif ! experiment.winner.nil?
+        # TODO: what should happen if the 'winner' is cleared? go back to persisted choice, or reselect?
+        # TODO: previous participation in experiment with 'winner' makes you ineligible for another experiment despite clean_old_experiments()
         ret = experiment.winner.name
       else
+        clean_old_experiments
         clean_old_versions(experiment)
         if exclude_visitor? || not_allowed_to_test?(experiment.key)
           ret = experiment.control.name

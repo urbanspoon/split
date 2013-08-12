@@ -79,7 +79,7 @@ module Split
     def experiment_for(name)
       if normalized_experiments
         # TODO symbols
-        normalized_experiments[name.to_sym]
+        normalized_experiments[name.to_s]
       end
     end
 
@@ -88,8 +88,8 @@ module Split
       @metrics = {}
       if self.experiments
         self.experiments.each do |key, value|
-          metric_name = value_for(value, :metric).to_sym rescue nil
-          if metric_name
+          metric_name = value_for(value, :metric).to_s rescue nil
+          unless metric_name.nil? || metric_name.empty?
             @metrics[metric_name] ||= []
             @metrics[metric_name] << Split::Experiment.new(key)
           end
@@ -104,16 +104,16 @@ module Split
       else
         experiment_config = {}
         @experiments.keys.each do |name|
-          experiment_config[name.to_sym] = {}
+          experiment_config[name.to_s] = {}
         end
 
         @experiments.each do |experiment_name, settings|
           if alternatives = value_for(settings, :alternatives)
-            experiment_config[experiment_name.to_sym][:alternatives] = normalize_alternatives(alternatives)
+            experiment_config[experiment_name.to_s][:alternatives] = normalize_alternatives(alternatives)
           end
 
           if goals = value_for(settings, :goals)
-            experiment_config[experiment_name.to_sym][:goals] = goals
+            experiment_config[experiment_name.to_s][:goals] = goals
           end
         end
 

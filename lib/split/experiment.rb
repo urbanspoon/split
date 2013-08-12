@@ -37,8 +37,12 @@ module Split
       self.resettable = options[:resettable]
     end
 
+    def self.names
+      Split.redis.smembers(:experiments)
+    end
+
     def self.all
-      Split.redis.smembers(:experiments).map {|e| find(e)}
+      names.map {|e| find(e)}
     end
 
     def self.find(name)

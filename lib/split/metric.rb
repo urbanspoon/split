@@ -36,7 +36,7 @@ module Split
     end
 
     def self.find(name)
-      name = name.intern if name.is_a?(String)
+      name = name.to_s
       metric = load_from_configuration(name)
       metric = load_from_redis(name) if metric.nil?
       metric

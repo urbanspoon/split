@@ -57,15 +57,15 @@ describe Split::Configuration do
   end
 
   it "should load a metric" do
-    @config.experiments = {:my_experiment=>
+    @config.experiments = {'my_experiment'=>
         {:alternatives=>["control_opt", "other_opt"], :metric=>:my_metric}}
 
     @config.metrics.should_not be_nil
-    @config.metrics.keys.should ==  [:my_metric]
+    @config.metrics.keys.should ==  ['my_metric']
   end
 
   it "should allow loading of experiment using experment_for" do
-    @config.experiments = {:my_experiment=>
+    @config.experiments = {'my_experiment'=>
         {:alternatives=>["control_opt", "other_opt"], :metric=>:my_metric}}
     @config.experiment_for(:my_experiment).should == {:alternatives=>["control_opt", ["other_opt"]]}
   end
@@ -86,7 +86,7 @@ describe Split::Configuration do
         end
 
         it 'should normalize experiments' do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
+          @config.normalized_experiments.should == {'my_experiment'=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
         end
       end
 
@@ -112,13 +112,13 @@ describe Split::Configuration do
         end
 
         it "should normalize experiments" do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>[{"Control Opt"=>0.67},
-            [{"Alt One"=>0.1}, {"Alt Two"=>0.23}]]}, :another_experiment=>{:alternatives=>["a", ["b"]]}}
+          @config.normalized_experiments.should == {'my_experiment'=>{:alternatives=>[{"Control Opt"=>0.67},
+            [{"Alt One"=>0.1}, {"Alt Two"=>0.23}]]}, 'another_experiment'=>{:alternatives=>["a", ["b"]]}}
         end
 
         it "should recognize metrics" do
           @config.metrics.should_not be_nil
-          @config.metrics.keys.should ==  [:my_metric]
+          @config.metrics.keys.should ==  ['my_metric']
         end
       end
     end
@@ -139,7 +139,7 @@ describe Split::Configuration do
         end
 
         it "should normalize experiments" do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
+          @config.normalized_experiments.should == {'my_experiment'=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
         end
       end
 
@@ -168,7 +168,7 @@ describe Split::Configuration do
 
   it "should normalize experiments" do
     @config.experiments = {
-      :my_experiment => {
+      'my_experiment' => {
         :alternatives => [
           { :name => "control_opt", :percent => 67 },
           { :name => "second_opt", :percent => 10 },
@@ -177,6 +177,6 @@ describe Split::Configuration do
       }
     }
 
-    @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>[{"control_opt"=>0.67}, [{"second_opt"=>0.1}, {"third_opt"=>0.23}]]}}
+    @config.normalized_experiments.should == {'my_experiment'=>{:alternatives=>[{"control_opt"=>0.67}, [{"second_opt"=>0.1}, {"third_opt"=>0.23}]]}}
   end
 end
