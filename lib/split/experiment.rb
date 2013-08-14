@@ -5,6 +5,7 @@ module Split
     attr_accessor :resettable
     attr_accessor :goals
     attr_accessor :alternatives
+    attr_accessor :metric
 
     def initialize(name, options = {})
       options = {
@@ -22,17 +23,18 @@ module Split
       end
 
       if alts.empty?
-        exp_config = Split.configuration.experiment_for(name)
+        exp_config = Split.configuration.experiment_for(@name)
         if exp_config
           alts = load_alternatives_from_configuration
-          options[:goals] = load_goals_from_configuration
+          options[:goals] = exp_config[:goals].flatten if exp_config[:goals]
           options[:resettable] = exp_config[:resettable]
           options[:algorithm] = exp_config[:algorithm]
         end
       end
 
-      self.alternatives = alts
-      self.goals = options[:goals]
+      self.alternatives = alts.flatten
+      self.goals = options[:goals] || []
+      self.metric = options[:metric]
       self.algorithm = options[:algorithm]
       self.resettable = options[:resettable]
     end
@@ -67,27 +69,13 @@ module Split
     def save
       validate!
 
-      if new_record?
-        Split.redis.sadd(:experiments, name)
-        Split.redis.hset(:experiment_start_times, @name, Time.now.to_i)
-        @alternatives.reverse.each {|a| Split.redis.lpush(name, a.name)}
-        @goals.reverse.each {|a| Split.redis.lpush(goals_key, a)} unless @goals.nil?
-      else
-
-        existing_alternatives = load_alternatives_from_redis
-        existing_goals = load_goals_from_redis
-        unless existing_alternatives == @alternatives.map(&:name) && existing_goals == @goals
-          reset
-          @alternatives.each(&:delete)
-          delete_goals
-          Split.redis.del(@name)
-          @alternatives.reverse.each {|a| Split.redis.lpush(name, a.name)}
-          @goals.reverse.each {|a| Split.redis.lpush(goals_key, a)} unless @goals.nil?
-        end
+      if new_record? # exists
+        persist
+      elsif new_version?
+        unpersist
+        persist
       end
 
-      Split.redis.hset(experiment_config_key, :resettable, resettable)
-      Split.redis.hset(experiment_config_key, :algorithm, algorithm.to_s)
       self
     end
 
@@ -101,11 +89,40 @@ module Split
       end
     end
 
+    def unpersist
+      reset
+      delete_goals
+      delete_alternatives
+    end
+
+    def persist
+      Split.redis.sadd(:experiments, name)
+      Split.redis.hset(:experiment_start_times, name, Time.now.to_i)
+      @alternatives.reverse.each {|a|
+        Split.redis.lpush(name, a.name)
+        a.save
+      }
+      goals.reverse.each {|g| Split.redis.lpush(goals_key, g)} unless goals.nil?
+      Split.redis.set(metric_key, metric)
+      Split.redis.hset(experiment_config_key, :resettable, resettable)
+      Split.redis.hset(experiment_config_key, :algorithm, algorithm.to_s)
+      Split.configuration.uncache(name)
+    end
+
     def new_record?
-      !Split.redis.exists(name)
+      !Split.configuration.experiment_for(name)
+    end
+
+    def new_version?
+      config = Split.configuration.experiment_for(name)
+      existing_alternatives = config[:alternatives] #load_alternatives_from_redis
+      existing_goals = config[:goals] || [] #load_goals_from_redis
+
+      !(existing_alternatives.flatten.map(&:keys).flatten == alternatives.map(&:name) && existing_goals == goals)
     end
 
     def ==(obj)
+      # TODO: equivalency should be all properties
       self.name == obj.name
     end
 
@@ -130,21 +147,19 @@ module Split
         if alternative.kind_of?(Split::Alternative)
           alternative
         else
-          Split::Alternative.new(alternative, @name)
+          Split::Alternative.new(alternative, @name, self)
         end
       end
     end
 
     def winner
-      if w = Split.redis.hget(:experiment_winner, name)
-        Split::Alternative.new(w, name)
-      else
-        nil
-      end
+      w = Split.configuration.winner(name)
+      w.nil? ? nil : Split::Alternative.new(w, name, self)
     end
 
     def winner=(winner_name)
-      Split.redis.hset(:experiment_winner, name, winner_name.to_s)
+      Split.configuration.set_winner(name,winner_name)
+      winner
     end
 
     def participant_count
@@ -156,7 +171,7 @@ module Split
     end
 
     def reset_winner
-      Split.redis.hdel(:experiment_winner, name)
+      Split.configuration.reset_winner(name)
     end
 
     def start_time
@@ -184,11 +199,11 @@ module Split
     end
 
     def version
-      @version ||= (Split.redis.get("#{name.to_s}:version").to_i || 0)
+      @version ||= Split.configuration.experiment_versions[name.to_s].to_i
     end
 
     def increment_version
-      @version = Split.redis.incr("#{name}:version")
+      @version = Split.configuration.increment_experiment_version(name.to_s)
     end
 
     def key
@@ -200,6 +215,9 @@ module Split
     end
 
     def goals_key
+      Experiment.goals_key(name)
+    end
+    def self.goals_key(name)
       "#{name}:goals"
     end
 
@@ -218,12 +236,16 @@ module Split
     end
 
     def delete
-      alternatives.each(&:delete)
       reset_winner
       Split.redis.srem(:experiments, name)
-      Split.redis.del(name)
+      delete_alternatives
       delete_goals
       increment_version
+    end
+
+    def delete_alternatives
+      load_alternatives_from_redis.each{|alt| Split.redis.del("#{@name}:#{alt.name}")}
+      Split.redis.del(@name)
     end
 
     def delete_goals
@@ -236,6 +258,30 @@ module Split
       self.algorithm = exp_config['algorithm']
       self.alternatives = load_alternatives_from_redis
       self.goals = load_goals_from_redis
+    end
+
+    def self.from_redis(name)
+      return nil unless Split.redis.exists(name)
+      exp_config = Split.redis.hgetall(experiment_config_key(name))
+      options = {}
+      options[:resettable] = exp_config['resettable'] if exp_config['resettable']
+      options[:algorithm] = exp_config['algorithm'] if exp_config['algorithm']
+      alternatives = load_alternatives_from_redis(name)
+      options[:alternatives] = alternatives if alternatives
+      goals = load_goals_from_redis(name)
+      options[:goals] = goals if goals
+      metrics = load_metrics_from_redis(name)
+      options[:metric] = metrics if metrics
+      Experiment.new(name, options)
+    end
+
+    def to_hash
+      alts = alternatives.map(&:to_hash)
+      goals = self.goals
+      options = {alternatives: alts, resettable: resettable, algorithm: algorithm}
+      options[:goals] = goals if goals && goals.any?
+      options[:metric] = metric if metric
+      {name.to_s => options}
     end
 
     protected
@@ -252,20 +298,33 @@ module Split
     end
 
     def experiment_config_key
-      "experiment_configurations/#{@name}"
+      Experiment.experiment_config_key(name)
     end
 
-    def load_goals_from_configuration
-      goals = Split.configuration.experiment_for(@name)[:goals]
-      if goals.nil?
-        goals = []
-      else
-        goals.flatten
-      end
+    def self.experiment_config_key(name)
+      "experiment_configurations/#{name}"
     end
 
     def load_goals_from_redis
-      Split.redis.lrange(goals_key, 0, -1)
+      Experiment.load_goals_from_redis(name)
+    end
+    def self.load_goals_from_redis(name)
+      Split.redis.lrange(goals_key(name), 0, -1) || []
+    end
+
+    def load_metrics_from_redis
+      Experiment.load_metrics_from_redis(name)
+    end
+    def self.load_metrics_from_redis(name)
+      #Split.redis.lrange(metrics_key(name), 0, -1) || []
+      Split.redis.get(metric_key(name))
+    end
+
+    def metric_key
+      Experiment.metric_key(name)
+    end
+    def self.metric_key(name)
+      "#{name}:metrics"
     end
 
     def load_alternatives_from_configuration
@@ -279,15 +338,11 @@ module Split
     end
 
     def load_alternatives_from_redis
-      case Split.redis.type(@name)
-      when 'set' # convert legacy sets to lists
-        alts = Split.redis.smembers(@name)
-        Split.redis.del(@name)
-        alts.reverse.each {|a| Split.redis.lpush(@name, a) }
-        Split.redis.lrange(@name, 0, -1)
-      else
-        Split.redis.lrange(@name, 0, -1)
-      end
+      Experiment.load_alternatives_from_redis(name)
+    end
+    def self.load_alternatives_from_redis(name)
+      alt_names = Split.redis.lrange(name, 0, -1) # lrange
+      alt_names.collect {|an| Alternative.new(an, name)}
     end
 
   end

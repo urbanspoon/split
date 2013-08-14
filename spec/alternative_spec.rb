@@ -61,11 +61,11 @@ describe Split::Alternative do
       experiment = Split::Experiment.new(:my_experiment)
       first = experiment.alternatives[0]
       first.name.should == 'control_opt'
-      first.weight.should == 0.67
+      first.weight.should == 67.0
 
       second = experiment.alternatives[1]
       second.name.should == 'second_opt'
-      second.weight.should == 0.1
+      second.weight.should == 10.0
     end
 
     it "accepts probability on some alternatives" do
@@ -82,10 +82,10 @@ describe Split::Alternative do
       experiment = Split::Experiment.new(:my_experiment)
       alts = experiment.alternatives
       [
-        ["control_opt", 0.34],
-        ["second_opt", 0.215],
-        ["third_opt", 0.23],
-        ["fourth_opt", 0.215]
+        ["control_opt", 34.0],
+        ["second_opt", 21.5],
+        ["third_opt", 23.0],
+        ["fourth_opt", 21.5]
       ].each do |h|
         name, weight = h
         alt = alts.shift
@@ -107,9 +107,9 @@ describe Split::Alternative do
       experiment = Split::Experiment.new(:my_experiment)
       alts = experiment.alternatives
       [
-        ["control_opt", 0.18],
-        ["second_opt", 0.18],
-        ["third_opt", 0.64],
+        ["control_opt", 18.0],
+        ["second_opt", 18.0],
+        ["third_opt", 64.0],
       ].each do |h|
         name, weight = h
         alt = alts.shift

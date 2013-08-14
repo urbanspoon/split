@@ -67,16 +67,35 @@ module Split
       }
     end
 
-    def experiments= experiments
+    def experiments=(experiments)
       raise InvalidExperimentsFormatError.new('Experiments must be a Hash') unless experiments.respond_to?(:keys)
-      @experiments = experiments
+
+      @experiments = stringify_keys(experiments)
+      persist(normalized_experiments)
+      @metrics = nil
+    end
+
+    def stringify_keys(hash)
+      stringified = {}
+      hash.each_pair do |key, value|
+        stringified[key.to_s] = value
+      end
+      stringified
     end
 
     def disabled?
       !enabled
     end
 
+    def uncache(name)
+      @experiments.delete(name)
+      @experiment_config = nil
+      @metrics = nil
+      @versions = nil
+    end
+
     def experiment_for(name)
+      load_experiment(name)
       if normalized_experiments
         # TODO symbols
         normalized_experiments[name.to_s]
@@ -84,12 +103,13 @@ module Split
     end
 
     def metrics
-      return @metrics if defined?(@metrics)
+      return @metrics unless @metrics.nil?
       @metrics = {}
       if self.experiments
         self.experiments.each do |key, value|
-          metric_name = value_for(value, :metric).to_s rescue nil
-          unless metric_name.nil? || metric_name.empty?
+          metric = value_for(value, :metric)
+          unless metric.nil?
+            metric_name = metric.to_s
             @metrics[metric_name] ||= []
             @metrics[metric_name] << Split::Experiment.new(key)
           end
@@ -99,25 +119,23 @@ module Split
     end
 
     def normalized_experiments
-      if @experiments.nil?
-        nil
+      return @experiment_config if @experiment_config
+      if @experiments.nil? || @experiments.empty?
+        {}
       else
-        experiment_config = {}
-        @experiments.keys.each do |name|
-          experiment_config[name.to_s] = {}
-        end
-
-        @experiments.each do |experiment_name, settings|
+        @experiment_config = {}
+        @experiments.each do |name, settings|
+          name = name.to_s
+          @experiment_config[name] = {}
           if alternatives = value_for(settings, :alternatives)
-            experiment_config[experiment_name.to_s][:alternatives] = normalize_alternatives(alternatives)
+            @experiment_config[name][:alternatives] = normalize_alternatives(alternatives)
           end
-
-          if goals = value_for(settings, :goals)
-            experiment_config[experiment_name.to_s][:goals] = goals
+          [:goals, :metric, :resettable, :algorithm].each do |key|
+            @experiment_config[name].merge! key_pair_for(settings, key)
           end
         end
 
-        experiment_config
+        @experiment_config
       end
     end
 
@@ -132,24 +150,19 @@ module Split
       end
 
       num_without_probability = alternatives.length - num_with_probability
-      unassigned_probability = ((100.0 - given_probability) / num_without_probability / 100.0)
+      unassigned_probability = ((100.0 - given_probability) / num_without_probability)
 
-      if num_with_probability.nonzero?
-        alternatives = alternatives.map do |v|
-          if (name = value_for(v, :name)) && (percent = value_for(v, :percent))
-            { name => percent / 100.0 }
-          elsif name = value_for(v, :name)
-            { name => unassigned_probability }
-          else
-            { v => unassigned_probability }
-          end
+      alternatives = alternatives.map do |v|
+        if (name = value_for(v, :name)) && (percent = value_for(v, :percent))
+          { name => percent }
+        elsif name = value_for(v, :name)
+          { name => unassigned_probability }
+        else
+          { v => unassigned_probability }
         end
-
-        [alternatives.shift, alternatives]
-      else
-        alternatives = alternatives.dup
-        [alternatives.shift, alternatives]
       end
+
+      [alternatives.shift, alternatives]
     end
 
     def robot_regex
@@ -167,18 +180,135 @@ module Split
       @experiments = {}
       @persistence = Split::Persistence::SessionAdapter
       @algorithm = Split::Algorithms::WeightedSample
+
+      @reload_period = 'versioned'
+      @_last_reload = Time.new(0)
+      @_cached_version = 0
+    end
+
+    def experiment_versions
+      @versions ||= load_versions_from_redis
+    end
+
+    def increment_experiment_version(experiment_name)
+      experiment_versions[experiment_name] = Split.redis.hincrby('versions', experiment_name, 1)
+      increment_version
+      experiment_versions[experiment_name]
+    end
+
+    def winner(experiment_name)
+      @winners ||= load_winners
+      @winners[experiment_name.to_s]
+    end
+
+    def set_winner(experiment_name, winner_name)
+      Split.redis.hset(:experiment_winner, experiment_name, winner_name.to_s)
+      @winners[experiment_name] = winner_name.to_s if @winners
+      increment_version
+    end
+
+    def reset_winner(experiment_name)
+      Split.redis.hdel(:experiment_winner, experiment_name)
+      @winners[experiment_name] = nil if @winners
+      increment_version
+    end
+
+    def update
+      update_from_redis if enabled && time_to_reload?
+    rescue => e
+      raise unless db_failover
+      db_failover_on_db_error.call(e)
+    ensure
+      return self
     end
 
     private
 
+    def persist(experiments)
+      experiments.each do |exp|
+        name, options = exp
+        e = Experiment.find(name)
+        unless e && e.to_hash == exp
+          save_in_redis(name, options)
+        end
+      end
+    rescue => e
+      raise unless db_failover
+      db_failover_on_db_error.call(e)
+    end
+
+    def save_in_redis(name, options)
+      e = Experiment.new(name, options)
+      e.persist
+      @experiments.merge! e.to_hash
+    end
+
+    def load_experiment(name)
+      @experiments ||= {}
+      return @experiments[name.to_s] if @experiments[name.to_s]
+
+      e =  Experiment.from_redis(name)
+      if e
+        uncache(name)
+        @experiments.merge!(e.to_hash)
+      end
+    end
+
+    def time_to_reload?
+      if @reload_period.to_s == 'versioned'
+# @remote_version instance variable?
+        @remote_version = config_version
+        @remote_version.to_i > @_cached_version.to_i
+      else
+        @reload_period.to_i > 10 && (Time.now - @_last_reload > @reload_period)
+      end
+    rescue => e
+      raise unless db_failover
+      db_failover_on_db_error.call(e)
+      return false
+    end
+
+    def update_from_redis
+      last_reload = Time.now
+
+      @versions = load_versions_from_redis
+      @winners = load_winners
+
+      @_last_reload = last_reload
+      @_cached_version = @remote_version
+      @remote_version = nil
+    end
+
     def value_for(hash, key)
       if hash.kind_of?(Hash)
-        hash[key.to_s] || hash[key.to_sym]
+        value = hash[key.to_s]
+        value.nil? ? hash[key.to_sym] : value
       end
+    end
+
+    def key_pair_for(hash,key)
+      value = value_for(hash, key)
+      value.nil? ? {} : {key => value}
     end
 
     def escaped_bots
       bots.map { |key, _| Regexp.escape(key) }
+    end
+
+    def load_winners
+      Split.redis.hgetall(:experiment_winner)
+    end
+
+    def config_version
+      Split.redis.get('config_version')
+    end
+
+    def increment_version
+      Split.redis.incr('config_version')
+    end
+
+    def load_versions_from_redis
+      Split.redis.hgetall('versions')
     end
   end
 end

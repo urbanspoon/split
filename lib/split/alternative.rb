@@ -4,19 +4,29 @@ module Split
     attr_accessor :experiment_name
     attr_accessor :weight
 
-    def initialize(name, experiment_name)
+    def initialize(name, experiment_name, experiment = nil)
       @experiment_name = experiment_name
       if Hash === name
-        @name = name.keys.first
-        @weight = name.values.first
+        if name[:name]
+          @name = name[:name]
+          @weight = name[:percent]
+        else
+          @name = name.keys.first
+          @weight = name.values.first
+        end
       else
         @name = name
-        @weight = 1
+        @weight = (weight_from_redis || 1).to_f
       end
+      @_experiment = experiment
     end
 
     def to_s
       name
+    end
+
+    def to_hash
+      {name: name, percent: weight}
     end
 
     def goals
@@ -80,7 +90,7 @@ module Split
     end
 
     def experiment
-      Split::Experiment.find(experiment_name)
+      @_experiment ||= Split::Experiment.find(experiment_name)
     end
 
     def z_score(goal = nil)
@@ -110,6 +120,7 @@ module Split
     end
 
     def save
+      Split.redis.hsetnx key, 'weight', (weight)
       Split.redis.hsetnx key, 'participant_count', 0
       Split.redis.hsetnx key, 'completed_count', 0
     end
@@ -135,6 +146,10 @@ module Split
     end
 
     private
+
+    def weight_from_redis
+      Split.redis.hget key, 'weight' if Split.configuration.enabled
+    end
 
     def hash_with_correct_values?(name)
       Hash === name && String === name.keys.first && Float(name.values.first) rescue false

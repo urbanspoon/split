@@ -2,6 +2,7 @@ module Split
   module Helper
 
     def ab_test(metric_descriptor, control=nil, *alternatives)
+      update_split_configuration
       if RUBY_VERSION.match(/1\.8/) && alternatives.length.zero? && ! control.nil?
         puts 'WARNING: You should always pass the control alternative through as the second argument with any other alternatives as the third because the order of the hash is not preserved in ruby 1.8'
       end
@@ -18,8 +19,9 @@ module Split
       control ||= experiment.control && experiment.control.name
 
         ret = if Split.configuration.enabled
-          experiment.save
+          experiment.save # *allrediscommands?*
           start_trial( Trial.new(:experiment => experiment) )
+            #hget 'split:experiment_winner' '[name]'
         else
           control_variable(control)
         end
@@ -141,7 +143,7 @@ module Split
     end
 
     def old_versions(experiment)
-      if experiment.version > 0
+      if experiment.version > 0 #get 'split:[name]:version'
         keys = ab_user.keys.select { |k| k.match(Regexp.new(experiment.name)) }
         keys_without_experiment(keys, experiment.key)
       else
@@ -164,6 +166,13 @@ module Split
 
     protected
 
+    def update_split_configuration
+      unless @_split_config_updated
+        Split.configuration.update
+        @_split_config_updated = true
+      end
+    end
+
     def normalize_experiment(metric_descriptor)
       if Hash === metric_descriptor
         experiment_name = metric_descriptor.keys.first.to_s
@@ -184,13 +193,13 @@ module Split
       if override_present?(experiment.name)
         ret = override_alternative(experiment.name)
         ab_user[experiment.key] = ret if Split.configuration.store_override
-      elsif ! experiment.winner.nil?
+      elsif ! experiment.winner.nil? #hget 'split:experiment_winner' '[name]'
         # TODO: what should happen if the 'winner' is cleared? go back to persisted choice, or reselect?
         # TODO: previous participation in experiment with 'winner' makes you ineligible for another experiment despite clean_old_experiments()
         ret = experiment.winner.name
       else
         clean_old_experiments
-        clean_old_versions(experiment)
+        clean_old_versions(experiment) #get 'split:[name]:version'
         if exclude_visitor? || not_allowed_to_test?(experiment.key)
           ret = experiment.control.name
         else

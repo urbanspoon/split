@@ -12,7 +12,7 @@ module Split
     end
 
     def self.load_from_redis(name)
-      metric = Split.redis.hget(:metrics, name)
+      metric = Split.redis.hget(:metric, name)
       if metric
         experiment_names = metric.split(',')
 
@@ -56,7 +56,10 @@ module Split
     end
 
     def save
-      Split.redis.hset(:metrics, name, experiments.map(&:name).join(','))
+      # TODO: consider merging in experiments known by Redis
+      #existing_metrics = Split.redis.hget(:metrics, name)
+      #existing_metrics.merge! experiments.map(&:name)
+      Split.redis.hset(:metric, name, experiments.map(&:name).join(','))
     end
 
     def complete!
