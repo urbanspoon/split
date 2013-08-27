@@ -227,20 +227,17 @@ module Split
     def persist(experiments)
       experiments.each do |exp|
         name, options = exp
-        e = Experiment.find(name)
-        unless e && e.to_hash == exp
-          save_in_redis(name, options)
+        normalized = Experiment.new(name, options)
+        known = Experiment.find(name)
+        unless known && known.to_hash == normalized.to_hash
+          normalized.unpersist
+          normalized.persist
+          @experiments.merge! normalized.to_hash
         end
       end
     rescue => e
       raise unless db_failover
       db_failover_on_db_error.call(e)
-    end
-
-    def save_in_redis(name, options)
-      e = Experiment.new(name, options)
-      e.persist
-      @experiments.merge! e.to_hash
     end
 
     def load_experiment(name)
