@@ -272,6 +272,7 @@ describe Split::Helper do
               :alternatives => ['a', 'b']
           }
       }
+      Split.configuration.stub experiment_versions: {}
       ab_user.keys.each do |key|
         ab_user.delete(key)
       end
@@ -291,6 +292,7 @@ describe Split::Helper do
     end
 
     it 'should not delete the cookie for a versioned config-known experiment' do
+      Split.configuration.stub experiment_versions: {'known_experiment' => '23'}
       ab_user['known_experiment:23'] = 'b'
       clean_old_experiments
       ab_user.keys.should eq(['known_experiment:23'])

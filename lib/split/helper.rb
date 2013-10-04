@@ -114,14 +114,20 @@ module Split
     end
 
     def clean_old_experiments
-      participating_experiments = ab_user.keys.collect{|k| k.split(':')[0]}
+      participating_experiments = ab_user.keys.collect{|k| k.split(':')}
+
       config_experiments = Split.configuration.normalized_experiments.keys
+      config_experiments = config_experiments.collect{|k| [k, Split.configuration.experiment_versions[k]].compact}
+
       potential_unknowns = participating_experiments - config_experiments
+
       if potential_unknowns.length > 0
         datastore_experiments = Split::Experiment.names
+        datastore_experiments = datastore_experiments.collect{|k| [k, Split.configuration.experiment_versions[k]].compact}
+
         unrecognized_experiments = potential_unknowns - datastore_experiments
         unrecognized_experiments.each do |old_experiment|
-          ab_user.keys.select{|k| k.match /^#{old_experiment}(:\d+)?$/}.each do |key|
+          ab_user.keys.select{|k| k.match /^#{old_experiment[0]}(:\d+)?$/}.each do |key|
             ab_user.delete key
           end
         end
@@ -199,7 +205,6 @@ module Split
         ret = experiment.winner.name
       else
         clean_old_experiments
-        clean_old_versions(experiment) #get 'split:[name]:version'
         if exclude_visitor? || not_allowed_to_test?(experiment.key)
           ret = experiment.control.name
         else
