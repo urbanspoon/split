@@ -7,7 +7,7 @@
   <div class="experiment-header">
     <h2>
       Experiment: <%= experiment.name %>
-      <% if experiment.version > 1 %><span class='version'>v<%= experiment.version %></span><% end %>
+      <% if experiment.version > 0 %><span class='version'>v<%= experiment.version %></span><% end %>
       <% unless goal.nil? %><span class='goal'>Goal:<%= goal %></span><% end %>
     </h2>
 

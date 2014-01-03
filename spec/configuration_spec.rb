@@ -57,17 +57,16 @@ describe Split::Configuration do
   end
 
   it "should load a metric" do
-    @config.experiments = {:my_experiment=>
+    @config.experiments = {'my_experiment'=>
         {:alternatives=>["control_opt", "other_opt"], :metric=>:my_metric}}
-
     @config.metrics.should_not be_nil
-    @config.metrics.keys.should ==  [:my_metric]
+    @config.metrics.keys.should ==  ['my_metric']
   end
 
   it "should allow loading of experiment using experment_for" do
-    @config.experiments = {:my_experiment=>
+    @config.experiments = {'my_experiment'=>
         {:alternatives=>["control_opt", "other_opt"], :metric=>:my_metric}}
-    @config.experiment_for(:my_experiment).should == {:alternatives=>["control_opt", ["other_opt"]]}
+    @config.experiment_for(:my_experiment).should == {:alternatives=>[{"control_opt" => 50.0}, [{"other_opt" => 50.0}]], :metric => :my_metric}
   end
 
   context "when experiments are defined via YAML" do
@@ -86,7 +85,20 @@ describe Split::Configuration do
         end
 
         it 'should normalize experiments' do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
+          # {'my_experiment'=>{:alternatives=>[{"Control Opt"=>1.0/3}, [{"Alt One"=>1.0/3}, {"Alt Two"=>1.0/3}]]}}
+          weights = {"Control Opt" => 100.0/3, "Alt One" => 100.0/3, "Alt Two" => 100.0/3}
+
+          alternatives = @config.normalized_experiments['my_experiment'][:alternatives].flatten
+          alternatives.each do |alt|
+            alt.each_pair do |name, weight|
+              weight.should be_within(1.0e-10).of(weights[name])
+            end
+          end
+        end
+
+        it 'should retain the correct value for resettable' do
+          expect(@config.experiments['my_experiment'][:resettable]).to eq(false)
+          expect(@config.normalized_experiments['my_experiment'][:resettable]).to eq(false)
         end
       end
 
@@ -112,13 +124,17 @@ describe Split::Configuration do
         end
 
         it "should normalize experiments" do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>[{"Control Opt"=>0.67},
-            [{"Alt One"=>0.1}, {"Alt Two"=>0.23}]]}, :another_experiment=>{:alternatives=>["a", ["b"]]}}
+          @config.normalized_experiments.should == {
+              'my_experiment'=>{
+                  :alternatives=>[{"Control Opt"=>67.0}, [{"Alt One"=>10.0}, {"Alt Two"=>23.0}]],
+                  :metric => 'my_metric',
+                  :resettable => false},
+              'another_experiment'=>{:alternatives=>[{"a"=> 50.0}, [{"b" => 50.0}]]}}
         end
 
         it "should recognize metrics" do
           @config.metrics.should_not be_nil
-          @config.metrics.keys.should ==  [:my_metric]
+          @config.metrics.keys.should ==  ['my_metric']
         end
       end
     end
@@ -139,7 +155,15 @@ describe Split::Configuration do
         end
 
         it "should normalize experiments" do
-          @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>["Control Opt", ["Alt One", "Alt Two"]]}}
+          # {'my_experiment'=>{:alternatives=>[{"Control Opt"=>1.0/3}, [{"Alt One"=>1.0/3}, {"Alt Two"=>1.0/3}]]}}
+          weights = {"Control Opt" => 100.0/3, "Alt One" => 100.0/3, "Alt Two" => 100.0/3}
+
+          alternatives = @config.normalized_experiments['my_experiment'][:alternatives].flatten
+          alternatives.each do |alt|
+            alt.each_pair do |name, weight|
+              weight.should be_within(1.0e-10).of(weights[name])
+            end
+          end
         end
       end
 
@@ -168,7 +192,7 @@ describe Split::Configuration do
 
   it "should normalize experiments" do
     @config.experiments = {
-      :my_experiment => {
+      'my_experiment' => {
         :alternatives => [
           { :name => "control_opt", :percent => 67 },
           { :name => "second_opt", :percent => 10 },
@@ -177,6 +201,6 @@ describe Split::Configuration do
       }
     }
 
-    @config.normalized_experiments.should == {:my_experiment=>{:alternatives=>[{"control_opt"=>0.67}, [{"second_opt"=>0.1}, {"third_opt"=>0.23}]]}}
+    @config.normalized_experiments.should == {'my_experiment'=>{:alternatives=>[{"control_opt"=>67.0}, [{"second_opt"=>10.0}, {"third_opt"=>23.0}]]}}
   end
 end

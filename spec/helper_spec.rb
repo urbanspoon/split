@@ -265,6 +265,40 @@ describe Split::Helper do
 
   end
 
+  describe 'clean_old_experiments' do
+    before(:each) do
+      Split.configuration.experiments = {
+          :known_experiment  => {
+              :alternatives => ['a', 'b']
+          }
+      }
+      Split.configuration.stub experiment_versions: {}
+      ab_user.keys.each do |key|
+        ab_user.delete(key)
+      end
+    end
+
+    it 'should not delete the cookie for a config-known experiment' do
+      ab_user['known_experiment'] = 'b'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment'])
+    end
+
+    it 'should delete the cookie for an unknown experiment' do
+      ab_user['known_experiment'] = 'b'
+      ab_user['unknown_experiment'] = 'c'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment'])
+    end
+
+    it 'should not delete the cookie for a versioned config-known experiment' do
+      Split.configuration.stub experiment_versions: {'known_experiment' => '23'}
+      ab_user['known_experiment:23'] = 'b'
+      clean_old_experiments
+      ab_user.keys.should eq(['known_experiment:23'])
+    end
+  end
+
   context "finished with config" do
     it "passes reset option" do
       Split.configuration.experiments = {
@@ -286,12 +320,13 @@ describe Split::Helper do
     before { Split::Alternative.stub(:new).and_call_original }
 
     def should_finish_experiment(experiment_name, should_finish=true)
+      experiment_name = experiment_name.to_s
       alts = Split.configuration.experiments[experiment_name][:alternatives]
       experiment = Split::Experiment.find_or_create(experiment_name, *alts)
-      alt_name = ab_user[experiment.key] = alts.first
+      alt_name = ab_user[experiment.key] = alts.first[:name]
       alt = double('alternative')
       alt.stub(:name).and_return(alt_name)
-      Split::Alternative.stub(:new).with(alt_name, experiment_name.to_s).and_return(alt)
+      Split::Alternative.stub(:new).with({alt_name => 50.0}, experiment_name, anything).and_return(alt)
       if should_finish
         alt.should_receive(:increment_completion)
       else
@@ -300,10 +335,11 @@ describe Split::Helper do
     end
 
     it "completes the test" do
-      Split.configuration.experiments[:my_experiment] = {
+      # TODO: regression test for assignments like Split.configuration.experiments[:my_experiment] = {...}
+      Split.configuration.experiments = {:my_experiment => {
         :alternatives => [ "control_opt", "other_opt" ],
         :metric => :my_metric
-      }
+      }}
       should_finish_experiment :my_experiment
       finished :my_metric
     end
@@ -669,7 +705,7 @@ describe Split::Helper do
               error.should be_a(Errno::ECONNREFUSED)
             end
           end
-          Split.configuration.db_failover_on_db_error.should_receive(:call)
+          Split.configuration.db_failover_on_db_error.should_receive(:call).twice
           ab_test('link_color', 'blue', 'red')
         end
         it 'should always use first alternative' do
@@ -704,8 +740,8 @@ describe Split::Helper do
 
         context 'and preloaded config given' do
           before do
-            Split.configuration.experiments[:link_color] = {
-              :alternatives => [ "blue", "red" ],
+            Split.configuration.experiments = {
+              :link_color => {:alternatives => [ "blue", "red" ]}
             }
           end
 
@@ -796,7 +832,7 @@ describe Split::Helper do
       }
       ab_test :my_experiment
       experiment = Split::Experiment.new(:my_experiment)
-      experiment.alternatives.collect{|a| [a.name, a.weight]}.should == [['control_opt', 0.67], ['second_opt', 0.1], ['third_opt', 0.23]]
+      experiment.alternatives.collect{|a| [a.name, a.weight]}.should == [['control_opt', 67.0], ['second_opt', 10.0], ['third_opt', 23.0]]
 
     end
 
@@ -812,8 +848,8 @@ describe Split::Helper do
       ab_test :my_experiment
       experiment = Split::Experiment.new(:my_experiment)
       names_and_weights = experiment.alternatives.collect{|a| [a.name, a.weight]}
-      names_and_weights.should == [['control_opt', 0.34], ['second_opt', 0.215], ['third_opt', 0.23], ['fourth_opt', 0.215]]
-      names_and_weights.inject(0){|sum, nw| sum + nw[1]}.should == 1.0
+      names_and_weights.should == [['control_opt', 34.0], ['second_opt', 21.5], ['third_opt', 23.0], ['fourth_opt', 21.5]]
+      names_and_weights.inject(0){|sum, nw| sum + nw[1]}.should == 100.0
     end
 
     it "allows name param without probability" do
@@ -827,13 +863,15 @@ describe Split::Helper do
       ab_test :my_experiment
       experiment = Split::Experiment.new(:my_experiment)
       names_and_weights = experiment.alternatives.collect{|a| [a.name, a.weight]}
-      names_and_weights.should ==  [['control_opt', 0.18], ['second_opt', 0.18], ['third_opt', 0.64]]
-      names_and_weights.inject(0){|sum, nw| sum + nw[1]}.should == 1.0
+      names_and_weights.should ==  [['control_opt', 18.0], ['second_opt', 18.0], ['third_opt', 64.0]]
+      names_and_weights.inject(0){|sum, nw| sum + nw[1]}.should == 100.0
     end
 
     it "fails gracefully if config is missing experiment" do
-      Split.configuration.experiments = { :other_experiment => { :foo => "Bar" } }
-      lambda { ab_test :my_experiment }.should raise_error
+      lambda {
+        Split.configuration.experiments = { :other_experiment => { :foo => "Bar" } }
+        ab_test :my_experiment
+      }.should raise_error
     end
 
     it "fails gracefully if config is missing" do

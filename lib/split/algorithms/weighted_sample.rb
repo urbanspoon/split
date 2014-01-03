@@ -11,6 +11,8 @@ module Split
           return n if w >= point
           point -= w
         end
+
+        experiment.alternatives.last # for possible float rounding issue
       end
     end
   end

@@ -2,6 +2,7 @@ module Split
   module Helper
 
     def ab_test(metric_descriptor, control=nil, *alternatives)
+      update_split_configuration
       if RUBY_VERSION.match(/1\.8/) && alternatives.length.zero? && ! control.nil?
         puts 'WARNING: You should always pass the control alternative through as the second argument with any other alternatives as the third because the order of the hash is not preserved in ruby 1.8'
       end
@@ -18,8 +19,9 @@ module Split
       control ||= experiment.control && experiment.control.name
 
         ret = if Split.configuration.enabled
-          experiment.save
+          experiment.save # *allrediscommands?*
           start_trial( Trial.new(:experiment => experiment) )
+            #hget 'split:experiment_winner' '[name]'
         else
           control_variable(control)
         end
@@ -111,6 +113,27 @@ module Split
       instance_eval(&Split.configuration.ignore_filter)
     end
 
+    def clean_old_experiments
+      participating_experiments = ab_user.keys.collect{|k| k.split(':')}
+
+      config_experiments = Split.configuration.normalized_experiments.keys
+      config_experiments = config_experiments.collect{|k| [k, Split.configuration.experiment_versions[k]].compact}
+
+      potential_unknowns = participating_experiments - config_experiments
+
+      if potential_unknowns.length > 0
+        datastore_experiments = Split::Experiment.names
+        datastore_experiments = datastore_experiments.collect{|k| [k, Split.configuration.experiment_versions[k]].compact}
+
+        unrecognized_experiments = potential_unknowns - datastore_experiments
+        unrecognized_experiments.each do |old_experiment|
+          ab_user.keys.select{|k| k.match /^#{old_experiment[0]}(:\d+)?$/}.each do |key|
+            ab_user.delete key
+          end
+        end
+      end
+    end
+
     def not_allowed_to_test?(experiment_key)
       !Split.configuration.allow_multiple_experiments && doing_other_tests?(experiment_key)
     end
@@ -126,7 +149,7 @@ module Split
     end
 
     def old_versions(experiment)
-      if experiment.version > 0
+      if experiment.version > 0 #get 'split:[name]:version'
         keys = ab_user.keys.select { |k| k.match(Regexp.new(experiment.name)) }
         keys_without_experiment(keys, experiment.key)
       else
@@ -149,12 +172,19 @@ module Split
 
     protected
 
+    def update_split_configuration
+      unless @_split_config_updated
+        Split.configuration.update
+        @_split_config_updated = true
+      end
+    end
+
     def normalize_experiment(metric_descriptor)
       if Hash === metric_descriptor
-        experiment_name = metric_descriptor.keys.first
+        experiment_name = metric_descriptor.keys.first.to_s
         goals = Array(metric_descriptor.values.first)
       else
-        experiment_name = metric_descriptor
+        experiment_name = metric_descriptor.to_s
         goals = []
       end
       return experiment_name, goals
@@ -168,11 +198,13 @@ module Split
       experiment = trial.experiment
       if override_present?(experiment.name)
         ret = override_alternative(experiment.name)
-        ab_user[experiment.key] = ret if Split.configuration.store_override
-      elsif ! experiment.winner.nil?
+        store_override(experiment.key, ret)
+      elsif ! experiment.winner.nil? #hget 'split:experiment_winner' '[name]'
+        # TODO: what should happen if the 'winner' is cleared? go back to persisted choice, or reselect?
+        # TODO: previous participation in experiment with 'winner' makes you ineligible for another experiment despite clean_old_experiments()
         ret = experiment.winner.name
       else
-        clean_old_versions(experiment)
+        clean_old_experiments
         if exclude_visitor? || not_allowed_to_test?(experiment.key)
           ret = experiment.control.name
         else
@@ -187,6 +219,13 @@ module Split
       end
 
       ret
+    end
+
+    def store_override(key, value)
+      if Split.configuration.store_override
+        ab_user.keys.each {|k| ab_user.delete(k)}
+        ab_user[key] = value
+      end
     end
 
     def call_trial_choose_hook(trial)
