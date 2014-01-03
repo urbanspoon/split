@@ -198,7 +198,7 @@ module Split
       experiment = trial.experiment
       if override_present?(experiment.name)
         ret = override_alternative(experiment.name)
-        ab_user[experiment.key] = ret if Split.configuration.store_override
+        store_override(experiment.key, ret)
       elsif ! experiment.winner.nil? #hget 'split:experiment_winner' '[name]'
         # TODO: what should happen if the 'winner' is cleared? go back to persisted choice, or reselect?
         # TODO: previous participation in experiment with 'winner' makes you ineligible for another experiment despite clean_old_experiments()
@@ -219,6 +219,13 @@ module Split
       end
 
       ret
+    end
+
+    def store_override(key, value)
+      if Split.configuration.store_override
+        ab_user.keys.each {|k| ab_user.delete(k)}
+        ab_user[key] = value
+      end
     end
 
     def call_trial_choose_hook(trial)
